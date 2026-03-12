@@ -157,28 +157,37 @@ static void launch_gated_delta_net(
 
     int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
+    // for KDA we have to store one g per row, so we have higher register pressure
+    constexpr int nt_thresh = KDA ? 14 : 20;
+    // For gfx900 (MI25/WX9100), disable multi-token loop for PP (large n_tokens)
+    // to reduce register pressure and improve occupancy
+    const bool use_multi_token = n_tokens < 256;
     switch (S_v) {
         case 16:
-            gated_delta_net_cuda<16, KDA><<<grid_dims, block_dims, 0, stream>>>(
+            if (use_multi_token && n_tokens >= nt_thresh){
+                gated_delta_net_cuda<16, KDA, nt_thresh><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
             break;
         case 32:
-            gated_delta_net_cuda<32, KDA><<<grid_dims, block_dims, 0, stream>>>(
+            if (use_multi_token && n_tokens >= nt_thresh){
+                gated_delta_net_cuda<32, KDA, nt_thresh><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
             break;
         case 64: {
-            gated_delta_net_cuda<64, KDA><<<grid_dims, block_dims, 0, stream>>>(
+            if (use_multi_token && n_tokens >= nt_thresh){
+                gated_delta_net_cuda<64, KDA, nt_thresh><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
             break;
         }
         case 128: {
-            gated_delta_net_cuda<128, KDA><<<grid_dims, block_dims, 0, stream>>>(
+            if (use_multi_token && n_tokens >= nt_thresh){
+                gated_delta_net_cuda<128, KDA, nt_thresh><<<grid_dims, block_dims, 0, stream>>>(
                 q_d, k_d, v_d, g_d, b_d, s_d, dst_d, H,
                 n_tokens, n_seqs, sq1, sq2, sq3, sv1, sv2, sv3,
                 sb1, sb2, sb3, neqk1_magic, rq3_magic, scale);
