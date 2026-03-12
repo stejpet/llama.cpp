@@ -1,0 +1,16 @@
+./build/bin/llama-server \
+    --model ../models/GLM-4.7-Flash-UD-Q5_K_XL.gguf \
+    --alias "unsloth/GLM-4.7-Flash" \
+    --threads -1 \
+    --fit on \
+    --seed 3407 \
+    --temp 0.7 \
+    --host 0.0.0.0 \
+    --top-p 1 \
+    --min-p 0.01 \
+    --ctx-size 65536 \
+    --repeat-penalty 1.0 \
+    --batch-size 512 \
+    --ubatch-size 512 \
+    -sm layer \
+    --jinja

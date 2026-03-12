@@ -5,6 +5,13 @@
 
 #include <cstdint>
 
+// Use gfx900 DPP-based warp reductions on AMD gfx900 architecture
+#if defined(GGML_USE_HIP) && defined(__gfx900__)
+#define WARP_REDUCE_SUM(x) gfx900_warp_reduce_sum<warp_size>(x)
+#else
+#define WARP_REDUCE_SUM(x) warp_reduce_sum<warp_size>(x)
+#endif
+
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
 
 static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) {
@@ -310,10 +317,10 @@ static __global__ void mul_mat_vec_q(
                     }
                 }
             }
-            tmp[j][i] = warp_reduce_sum<warp_size>(tmp[j][i]);
+            tmp[j][i] = WARP_REDUCE_SUM(tmp[j][i]);
             if constexpr (has_fusion) {
                 if (use_gate) {
-                    tmp_gate[j][i] = warp_reduce_sum<warp_size>(tmp_gate[j][i]);
+                    tmp_gate[j][i] = WARP_REDUCE_SUM(tmp_gate[j][i]);
                 }
             }
         }

@@ -1,5 +1,10 @@
 #include "common.cuh"
 
+// Include gfx900 optimizations for AMD GCN architecture
+#if defined(GGML_USE_HIP) && defined(__gfx900__)
+#include "gfx900-common.cuh"
+#endif
+
 #define MMVQ_MAX_BATCH_SIZE 8 // Max. batch size for which to use MMVQ kernels.
 #define MMVQ_MMID_MAX_BATCH_SIZE 4 // Max. batch size for which to use MMVQ kernels for MUL_MAT_ID
 

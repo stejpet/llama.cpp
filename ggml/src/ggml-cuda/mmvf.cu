@@ -4,6 +4,13 @@
 #include "mmvf.cuh"
 #include "convert.cuh"
 
+// Use gfx900 DPP-based warp reductions on AMD gfx900 architecture
+#if defined(GGML_USE_HIP) && defined(__gfx900__)
+#define WARP_REDUCE_SUM(x) gfx900_warp_reduce_sum<warp_size>(x)
+#else
+#define WARP_REDUCE_SUM(x) warp_reduce_sum<warp_size>(x)
+#endif
+
 template <typename T, typename type_acc, int ncols_dst, int block_size, bool has_fusion = false, bool is_multi_token_id = false>
 static __global__ void mul_mat_vec_f(
         const T * __restrict__ x, const float * __restrict__ y, const int32_t * __restrict__ ids, const ggml_cuda_mm_fusion_args_device fusion, float * __restrict__ dst,
@@ -300,11 +307,11 @@ static __global__ void mul_mat_vec_f(
 
 #pragma unroll
     for (int j = 0; j < ncols_dst; ++j) {
-        sumf[j] = warp_reduce_sum<warp_size>(sumf[j]);
+        sumf[j] = WARP_REDUCE_SUM(sumf[j]);
 
         if constexpr (has_fusion) {
             if (use_gate) {
-                sumf_gate[j] = warp_reduce_sum<warp_size>(sumf_gate[j]);
+                sumf_gate[j] = WARP_REDUCE_SUM(sumf_gate[j]);
             }
         }
 
@@ -318,11 +325,11 @@ static __global__ void mul_mat_vec_f(
             __syncthreads();
             if (tid < warp_size) {
                 sumf[j] = buf_iw[tid];
-                sumf[j] = warp_reduce_sum<warp_size>(sumf[j]);
+                sumf[j] = WARP_REDUCE_SUM(sumf[j]);
                 if constexpr (has_fusion) {
                     if (use_gate) {
                         sumf_gate[j] = buf_iw_gate[tid];
-                        sumf_gate[j] = warp_reduce_sum<warp_size>(sumf_gate[j]);
+                        sumf_gate[j] = WARP_REDUCE_SUM(sumf_gate[j]);
                     }
                 }
             }

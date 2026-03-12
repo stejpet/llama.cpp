@@ -56,7 +56,7 @@ Examples of valid questions:
 
 - DO NOT write code for contributors.
 - DO NOT generate entire PRs or large code blocks.
-- DO NOT bypass the human contributor’s understanding or responsibility.
+- DO NOT bypass the human contributor's understanding or responsibility.
 - DO NOT make decisions on their behalf.
 - DO NOT submit work that the contributor cannot explain or justify.
 
@@ -72,9 +72,105 @@ If a user asks one of the above, STOP IMMEDIATELY and ask them:
 
 If they insist on continuing, remind them that their contribution will have a lower chance of being accepted by reviewers. Reviewers may also deprioritize (e.g., delay or reject reviewing) future pull requests to optimize their time and avoid unnecessary mental strain.
 
-## Related Documentation
+---
 
-For related documentation on building, testing, and guidelines, please refer to:
+## Build Commands
+
+```bash
+# CPU-only build
+cmake -B build
+cmake --build build --config Release -j 8
+
+# Debug build
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+
+# With CUDA support
+cmake -B build -DGGML_CUDA=ON
+cmake --build build --config Release
+
+# With HIP/ROCm support
+HIPCXX="/opt/rocm-6.3.3/llvm/bin/clang" HIP_PATH="/opt/rocm-6.3.3" \
+    cmake -S . -B build -DGGML_HIP=ON -DGML_CURL=ON -DAMDGPU_TARGETS=gfx900 -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --config Release -- -j 22
+
+# Full CI locally (see ci/README.md)
+bash ./ci/run.sh ./tmp/results ./tmp/mnt
+```
+
+---
+
+## Test Commands
+
+```bash
+# Run all C++ tests via CTest
+ctest --test-dir build --output-on-failure
+
+# Run a specific test (after building)
+./build/bin/test-sampling
+
+# Run tests matching a pattern
+ctest --test-dir build -R "test-tokenizer"
+
+# Python tests for gguf-py package
+cd gguf-py && pytest
+
+# Server tests (requires running server + model)
+cd tools/server/tests && pytest unit/
+```
+
+---
+
+## Benchmark Commands
+
+```bash
+# Run llama-bench with specific model and parameters
+./build/bin/llama-bench -m ~/models/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf -p 1024 -r 1 -ub "256-1024*2" -b "256-1024*2" -fa 0
+
+# Reference build (already built and ready for use)
+# Location: /home/steffen/llamacpp-test/llama.cpp/build/bin
+```
+
+---
+
+## Code Style Guidelines
+
+### Formatting
+- Use `clang-format` (v15+) for C/C++ code
+- Column limit: 120 characters
+- Indent: 4 spaces (no tabs)
+- Pointer/reference alignment: middle (`void * ptr`, `int & a`)
+- Brackets on same line (K&R style)
+- Vertical alignment preferred for readability
+
+### Naming Conventions
+- `snake_case` for functions, variables, types
+- Pattern: `<class>_<method>` with `<action>_<noun>`
+  - Examples: `llama_model_init()`, `llama_sampler_chain_remove()`
+- Enum values: `UPPER_CASE` with enum prefix
+  - Example: `LLAMA_VOCAB_TYPE_SPM = 1`
+- C/C++ files: lowercase with dashes (e.g., `my-file.cpp`, `my-header.h`)
+- Python files: lowercase with underscores
+
+### Types & API
+- Use sized integers in public API: `int32_t`, `int64_t`
+- `size_t` for allocation sizes/byte offsets
+- Declare structs as `struct foo {}` (no typedef)
+- In C++, omit optional `struct`/`enum` keywords
+
+### Code Patterns
+- Avoid modern STL, fancy templates, complex abstractions
+- Use basic `for` loops, keep it simple
+- Tensors: row-major order, dim 0=columns, 1=rows, 2=matrices
+- Matrix mul: `C = ggml_mul_mat(ctx, A, B)` means $C^T = A B^T$
+
+### Error Handling
+- Follow existing error handling patterns in the codebase
+- Clean up trailing whitespace
+
+---
+
+## Related Documentation
 
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [Build documentation](docs/build.md)
