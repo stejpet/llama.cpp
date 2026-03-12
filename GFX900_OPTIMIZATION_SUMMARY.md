@@ -6,14 +6,27 @@
 
 | Metric | Reference (master) | After Optimizations | Improvement |
 |--------|------------------|---------------------|-------------|
-| PP (t/s) | 349.32 | **380.43** | **+8.9%** |
-| TG (t/s) | 42.48 | **48.00** | **+13.0%** |
+| PP (t/s) | 349.32 | **391.32** | **+12.0%** |
+| TG (t/s) | 42.48 | **48.30** | **+13.7%** |
 
-**Test Configuration:**
+**Optimal Test Configuration:**
 - Model: Qwen3.5-35B-A3B Q8_0
 - GPUs: 3x Radeon Pro WX 9100 (gfx900)
-- Batch: 512, ubatch: 1024
-- Command: `./llama-bench -m model.gguf -p 1024 -r 1 -ub 1024 -b 512 -fa 0`
+- **Optimal Batch: b=1024, ubatch=512** (provides best PP performance)
+- Standard Batch: b=512, ubatch=1024
+- Command: `./llama-bench -m model.gguf -p 1024 -r 1 -ub 512 -b 1024 -fa 0`
+
+## Key Finding: Optimal Batch Sizes
+
+After extensive testing, we discovered optimal batch configurations for gfx900:
+
+| Batch | ubatch | PP t/s | TG t/s | Notes |
+|-------|--------|--------|--------|-------|
+| 512 | 1024 | 386.82 | 47.72 | Good baseline |
+| **1024** | **512** | **391.32** | **48.30** | **Best overall** |
+| 1024 | 1024 | 334.73 | 47.82 | Too large ubatch |
+
+**Recommendation:** Use `-b 1024 -ub 512` for best performance on gfx900.
 
 ## Implemented Optimizations
 
