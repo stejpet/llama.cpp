@@ -7,6 +7,11 @@
 #include <climits>
 #include <cstdint>
 
+// Include gfx900 optimizations for AMD GCN architecture
+#if defined(GGML_USE_HIP) && defined(__gfx900__)
+#include "gfx900-common.cuh"
+#endif
+
 using namespace ggml_cuda_mma;
 
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
@@ -54,6 +59,33 @@ struct block_fp4_mmq {
 static_assert(sizeof(block_q8_1_mmq) == 4*QK8_1 + 4*sizeof(half2), "Unexpected block_q8_1_mmq size");
 static_assert(sizeof(block_q8_1_mmq) == 4*sizeof(block_q8_1),      "Unexpected block_q8_1_mmq size");
 static_assert(sizeof(block_fp4_mmq)  == sizeof(block_q8_1_mmq),    "Unexpected block_fp4_mmq size");
+
+// ============================================================================
+// GFX900 Vectorized Load Helpers
+// Load 128-bit (int4) instead of 4x32-bit for better memory throughput
+// ============================================================================
+#if defined(GGML_USE_HIP) && defined(__gfx900__)
+
+// Load 4 int values (128 bits) using vectorized load
+static __device__ __forceinline__ void gfx900_load_int4_vectorized(
+    const int * __restrict__ src,
+    int * __restrict__ dst0,
+    int * __restrict__ dst1,
+    int * __restrict__ dst2,
+    int * __restrict__ dst3) {
+    const int4 vec = *((const int4 *)src);
+    *dst0 = vec.x;
+    *dst1 = vec.y;
+    *dst2 = vec.z;
+    *dst3 = vec.w;
+}
+
+// Prefetch helper for software pipelining
+static __device__ __forceinline__ void gfx900_prefetch_l1(const void * ptr) {
+    asm volatile("s_prefetch_data %0, level:1\n" :: "v"(ptr));
+}
+
+#endif // defined(GGML_USE_HIP) && defined(__gfx900__)
 
 static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
     switch (type_x) {
