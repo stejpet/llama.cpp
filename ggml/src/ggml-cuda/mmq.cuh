@@ -309,6 +309,10 @@ static constexpr __device__ int mmq_get_granularity_device(const int /*mmq_x*/) 
 
 #if defined(GGML_USE_HIP)
 static int mmq_get_nwarps_host(const int cc, const int warp_size) {
+    // gfx900 (Vega) benefits from more warps per block due to its 64 CU architecture
+    if (cc == GGML_CUDA_CC_VEGA) {
+        return 512 / warp_size;  // 8 warps for gfx900
+    }
     return amd_mfma_available(cc) ? 8 : 256/warp_size;
 }
 #else
@@ -320,6 +324,9 @@ static int mmq_get_nwarps_host(const int /*cc*/, const int warp_size) {
 static constexpr __device__ int mmq_get_nwarps_device() {
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     return 8;
+#elif defined(__gfx900__)
+    // gfx900 benefits from more warps for better occupancy on its 64 CU architecture
+    return 512/ggml_cuda_get_physical_warp_size();  // 8 warps
 #else
     return 256/ggml_cuda_get_physical_warp_size();
 #endif // AMD_MFMA_AVAILABLE
