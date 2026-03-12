@@ -283,14 +283,14 @@ static void launch_gated_delta_net(
         float scale, cudaStream_t stream) {
     //TODO: Add chunked kernel for even faster pre-fill
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
-    const int num_warps = 4;
+    // gfx900 benefits from more warps for better occupancy on its 64 CU architecture
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    const int num_warps = (cc == GGML_CUDA_CC_VEGA) ? 8 : 4;
     dim3      grid_dims(H, n_seqs, (S_v + num_warps - 1) / num_warps);
     dim3      block_dims(warp_size <= S_v ? warp_size : S_v, num_warps, 1);
 
     const uint3 neqk1_magic = init_fastdiv_values(neqk1);
     const uint3 rq3_magic   = init_fastdiv_values(rq3);
-
-    int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
     // for KDA we have to store one g per row, so we have higher register pressure
     constexpr int nt_thresh = KDA ? 14 : 20;
