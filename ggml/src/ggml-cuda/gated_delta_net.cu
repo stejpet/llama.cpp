@@ -1,6 +1,13 @@
 #include "gated_delta_net.cuh"
 
-template <int S_v, bool KDA>
+// Use gfx900 DPP-based warp reductions on AMD gfx900 architecture
+#if defined(GGML_USE_HIP) && defined(__gfx900__)
+#define WARP_REDUCE_SUM(x) gfx900_warp_reduce_sum<warp_size>(x)
+#else
+#define WARP_REDUCE_SUM(x) warp_reduce_sum<warp_size>(x)
+#endif
+
+template <int S_v, bool KDA, int n_tokens_per_loop = 1>
 __global__ void gated_delta_net_cuda(const float * q,
                                      const float * k,
                                      const float * v,
@@ -75,12 +82,85 @@ __global__ void gated_delta_net_cuda(const float * q,
             }
             float kv_col = warp_reduce_sum<warp_size>(kv_shard);
 
-            // delta[col] = (v[col] - g * kv[col]) * beta
-            float delta_col = (v_t[col] - g_val * kv_col) * beta_val;
+                // kv[col] = (S^T @ k)[col] = sum_i S[i][col] * k[i]
+                float kv_shard = 0.0f;
+#pragma unroll
+                for (int r = 0; r < rows_per_lane; r++) {
+                    kv_shard += s_shard[r] * ks[i][r];
+                }
+                float kv_col = WARP_REDUCE_SUM(kv_shard);
 
-            // fused: S[i][col] = g * S[i][col] + k[i] * delta[col]
-            // attn[col] = (S^T @ q)[col] = sum_i S[i][col] * q[i]
-            float attn_partial = 0.0f;
+                // delta[col] = (v[col] - g * kv[col]) * beta
+                float delta_col = (vs[i] - g_val * kv_col) * beta_ts[i];
+
+                // fused: S[i][col] = g * S[i][col] + k[i] * delta[col]
+                // attn[col] = (S^T @ q)[col] = sum_i S[i][col] * q[i]
+                float attn_partial = 0.0f;
+#pragma unroll
+                for (int r = 0; r < rows_per_lane; r++) {
+                    s_shard[r] = g_val * s_shard[r] + ks[i][r] * delta_col;
+                    attn_partial += s_shard[r] * qs[i][r];
+                }
+
+                float attn_col = WARP_REDUCE_SUM(attn_partial);
+
+                if (lane == 0) {
+                    attn_data[col] = attn_col * scale;
+                }
+            } else {
+                // kv[col] = sum_i g[i] * S[i][col] * k[i]
+                float kv_shard = 0.0f;
+#pragma unroll
+                for (int r = 0; r < rows_per_lane; r++) {
+                    kv_shard += g_vals[i][r] * s_shard[r] * ks[i][r];
+                }
+
+                float kv_col = WARP_REDUCE_SUM(kv_shard);
+
+                // delta[col] = (v[col] - kv[col]) * beta
+                float delta_col = (vs[i] - kv_col) * beta_ts[i];
+
+                // fused: S[i][col] = g[i] * S[i][col] + k[i] * delta[col]
+                // attn[col] = (S^T @ q)[col] = sum_i S[i][col] * q[i]
+                float attn_partial = 0.0f;
+#pragma unroll
+                for (int r = 0; r < rows_per_lane; r++) {
+                    s_shard[r] = g_vals[i][r] * s_shard[r] + ks[i][r] * delta_col;
+                    attn_partial += s_shard[r] * qs[i][r];
+                }
+
+                float attn_col = WARP_REDUCE_SUM(attn_partial);
+
+                if (lane == 0) {
+                    attn_data[col] = attn_col * scale;
+                }
+            }
+
+            attn_data += S_v * H;
+        }
+    }
+
+    if (tokens_to_process != n_tokens) {
+        // handle tail case
+// handle tail
+#pragma unroll
+        for (int i = 0; i < n_tokens_per_loop; i++) {
+            const int t = tokens_to_process + i;
+            if (t >= n_tokens) {
+                break;
+            }
+            const float * q_t       = q + iq3 * sq3 + t * sq2 + iq1 * sq1;
+            const float * k_t       = k + iq3 * sq3 + t * sq2 + iq1 * sq1;
+            const float * v_t       = v + sequence * sv3 + t * sv2 + h_idx * sv1;
+            const int64_t gb_offset = sequence * sb3 + t * sb2 + h_idx * sb1;
+            const float * beta_t    = beta + gb_offset;
+            const float * g_t       = g + gb_offset * (KDA ? S_v : 1);
+
+            beta_ts[i] = *beta_t;
+            vs[i]      = v_t[col];
+            if constexpr (!KDA) {
+                g_vals[i][0] = expf(*g_t);
+            }
 #pragma unroll
             for (int r = 0; r < rows_per_lane; r++) {
                 const int i = r * warp_size + lane;
@@ -124,7 +204,62 @@ __global__ void gated_delta_net_cuda(const float * q,
             }
         }
 
-        attn_data += S_v * H;
+                // kv[col] = (S^T @ k)[col] = sum_i S[i][col] * k[i]
+                float kv_shard = 0.0f;
+#pragma unroll
+                for (int r = 0; r < rows_per_lane; r++) {
+                    kv_shard += s_shard[r] * ks[i][r];
+                }
+                float kv_col = WARP_REDUCE_SUM(kv_shard);
+
+                // delta[col] = (v[col] - g * kv[col]) * beta
+                float delta_col = (vs[i] - g_val * kv_col) * beta_ts[i];
+
+                // fused: S[i][col] = g * S[i][col] + k[i] * delta[col]
+                // attn[col] = (S^T @ q)[col] = sum_i S[i][col] * q[i]
+                float attn_partial = 0.0f;
+#pragma unroll
+                for (int r = 0; r < rows_per_lane; r++) {
+                    s_shard[r] = g_val * s_shard[r] + ks[i][r] * delta_col;
+                    attn_partial += s_shard[r] * qs[i][r];
+                }
+
+                float attn_col = WARP_REDUCE_SUM(attn_partial);
+
+                if (lane == 0) {
+                    attn_data[col] = attn_col * scale;
+                }
+            } else {
+                // kv[col] = sum_i g[i] * S[i][col] * k[i]
+                float kv_shard = 0.0f;
+#pragma unroll
+                for (int r = 0; r < rows_per_lane; r++) {
+                    kv_shard += g_vals[i][r] * s_shard[r] * ks[i][r];
+                }
+
+                float kv_col = WARP_REDUCE_SUM(kv_shard);
+
+                // delta[col] = (v[col] - kv[col]) * beta
+                float delta_col = (vs[i] - kv_col) * beta_ts[i];
+
+                // fused: S[i][col] = g[i] * S[i][col] + k[i] * delta[col]
+                // attn[col] = (S^T @ q)[col] = sum_i S[i][col] * q[i]
+                float attn_partial = 0.0f;
+#pragma unroll
+                for (int r = 0; r < rows_per_lane; r++) {
+                    s_shard[r] = g_vals[i][r] * s_shard[r] + ks[i][r] * delta_col;
+                    attn_partial += s_shard[r] * qs[i][r];
+                }
+
+                float attn_col = WARP_REDUCE_SUM(attn_partial);
+
+                if (lane == 0) {
+                    attn_data[col] = attn_col * scale;
+                }
+            }
+
+            attn_data += S_v * H;
+        }
     }
 
     // Write state back to global memory (transposed layout)
