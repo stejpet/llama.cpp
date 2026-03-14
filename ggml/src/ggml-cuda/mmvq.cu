@@ -112,13 +112,13 @@ static constexpr __host__ __device__ int calc_nwarps(int ncols_dst, mmvq_paramet
             case 2:
             case 3:
             case 4:
-                return 4;  // BEAM-inspired: use 4 warps for gfx900 (256 threads optimal)
+                return 2;
             case 5:
             case 6:
             case 7:
             case 8:
             default:
-                return 2;  // BEAM-inspired: use 2 warps for larger columns
+                return 1;
         }
     }
     return 1;
