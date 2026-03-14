@@ -10,6 +10,7 @@
 // Include gfx900 optimizations for AMD GCN architecture
 #if defined(GGML_USE_HIP) && defined(__gfx900__)
 #include "gfx900-common.cuh"
+#include "gfx900-prefetch.cuh"
 #endif
 
 using namespace ggml_cuda_mma;
@@ -17,6 +18,9 @@ using namespace ggml_cuda_mma;
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
 #define MMQ_ITER_K 256
 #define MMQ_ITER_K_MXFP4_FP4    512
+
+// BEAM Search note: gfx900 may benefit from different warp counts, but requires
+// matching template instantiations and launch bounds. Current default is safe.
 #define MMQ_NWARPS 8
 
 typedef void (*load_tiles_mmq_t)(const char * __restrict__ x, int * x_tile, const int kbx0, const int i_max, const int stride);
@@ -3457,6 +3461,16 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
         __syncthreads();
 
+// GFX900 PREFETCH: Issue after barrier, before first vec_dot
+// Warp 0: prefetch Y tile, Warp 1: prefetch X tile for NEXT iteration
+// This overlaps with current iteration's compute
+#if defined(GGML_USE_HIP) && defined(__gfx900__)
+        int prefetch_y = gfx900_prefetch_y_tile(
+            y, ncols_y, kb0, kb0_stop, qk, blocks_per_iter);
+        int prefetch_x = gfx900_prefetch_x_tile(
+            x, offset_x, kb0, kb0_stop, blocks_per_iter, stride_row_x);
+#endif
+
         vec_dot(tile_x, tile_y, sum, 0);
 
         __syncthreads();
@@ -3474,6 +3488,13 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         __syncthreads();
 
         vec_dot(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+
+// GFX900 PREFETCH: Consume prefetch results after compute
+// This ensures compiler doesn't optimize away the prefetch
+#if defined(GGML_USE_HIP) && defined(__gfx900__)
+        gfx900_prefetch_consume(prefetch_y);
+        gfx900_prefetch_consume(prefetch_x);
+#endif
 
         __syncthreads();
     }
