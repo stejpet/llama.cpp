@@ -28,6 +28,40 @@ static __device__ __forceinline__ int get_int_b4(const void * x, const int & i32
     return ((const int *) x)[i32]; // assume at least 4 byte alignment
 }
 
+// ============================================================================
+// GFX900 Fast Memory Load Optimizations
+// Using memcpy for unaligned loads - compiler optimizes to efficient flat_load
+// Based on gfx906 optimizations which work well on all GCN architectures
+// ============================================================================
+#if defined(GGML_USE_HIP) && defined(__gfx900__)
+
+// Fast 32-bit load using memcpy - compiler emits single flat_load_dword
+static __device__ __forceinline__ int gfx900_get_int_b1_fast(const void * x, const int & i32) {
+    int x32;
+    memcpy(&x32, (const uint8_t*)x + 4*i32, 4);
+    return x32;
+}
+
+// Fast 32-bit load for 2-byte aligned data
+static __device__ __forceinline__ int gfx900_get_int_b2_fast(const void * x, const int & i32) {
+    int x32;
+    memcpy(&x32, (const uint8_t*)x + 4*i32, 4);
+    return x32;
+}
+
+// 64-bit vectorized load - emits global_load_dwordx2 when aligned
+static __device__ __forceinline__ int2 gfx900_load_int2(const void * x, const int & i32) {
+    int2 x64;
+    memcpy(&x64, (const uint8_t*)x + 4*i32, 8);
+    return x64;
+}
+
+// Redefine get_int functions for gfx900 to use fast versions
+#define get_int_b1 gfx900_get_int_b1_fast
+#define get_int_b2 gfx900_get_int_b2_fast
+
+#endif // defined(GGML_USE_HIP) && defined(__gfx900__)
+
 // q4 contains 8 indices with 4 bit each.
 // This function selects those bytes from table that are at those indices and returns them as int2.
 // The first int contains the bytes with even indices in q4, the second int contains the bytes with odd indices in q4.
@@ -235,7 +269,13 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q5_1_q8_1_imp
 }
 
 #define VDR_Q8_0_Q8_1_MMVQ 2
-#define VDR_Q8_0_Q8_1_MMQ 8
+
+// GFX900 optimization: Test different VDR values for best ILP on 4 VALU architecture
+#if defined(GGML_USE_HIP) && defined(__gfx900__)
+#define VDR_Q8_0_Q8_1_MMQ 4  // Smaller VDR for less register pressure, more iterations
+#else
+#define VDR_Q8_0_Q8_1_MMQ 8   // Default: Process 8 elements at once (4 iterations for 32 elements)
+#endif
 
 template <typename T, int vdr> static __device__ __forceinline__ T vec_dot_q8_0_q8_1_impl(
     const int * v, const int * u, const T & d8_0, const T & d8_1) {
