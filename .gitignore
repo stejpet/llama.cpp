@@ -136,5 +136,24 @@ poetry.toml
 # IDE
 /*.code-workspace
 /.windsurf/
+
+# Research/benchmark results
+results_*.csv
+results.tsv
+results*.json
+results*.txt
+results*.db
+test-beam-optimizations.sh
+beam_search_optimization.patch
+beam_search_report.json
+test_gfx900_dpp.cu
+
+# Research documentation (local files)
+*_OPTIMIZATION_*.md
+OPTIMIZATION_*.md
+BEAM_OPTIMIZATION_*.md
+CLAUDE.md
+*_research.md
+
 # emscripten
 a.out.*
