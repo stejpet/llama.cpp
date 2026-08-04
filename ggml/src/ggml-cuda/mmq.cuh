@@ -217,7 +217,7 @@ struct ggml_cuda_mmq_config {
 #include "mmq-config-ampere.cuh"
 #include "mmq-config-blackwell.cuh"
 
-#include "mmq-config-gfx900.cuh"
+#include "mmq-config-vega.cuh"
 #include "mmq-config-cdna.cuh"
 #include "mmq-config-rdna2.cuh"
 #include "mmq-config-rdna3.cuh"
@@ -232,7 +232,7 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
             return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
         }
         if (cc == GGML_CUDA_CC_VEGA) {
-            return ggml_cuda_mmq_get_config_gfx900(type, J, fallback);
+            return ggml_cuda_mmq_get_config_vega(type, J, fallback);
         }
         if (GGML_CUDA_CC_IS_RDNA4(cc)) {
             return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
@@ -259,7 +259,7 @@ static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_t
 #ifdef CDNA
     return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
 #elif defined(__gfx900__)
-    return ggml_cuda_mmq_get_config_gfx900(type, J, fallback);
+    return ggml_cuda_mmq_get_config_vega(type, J, fallback);
 #elif defined(RDNA4)
     return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
 #elif defined(RDNA3_5)
