@@ -66,11 +66,71 @@ Profile after fix: `flash_attn_tile` share 67.6% -> 9.7%, max TILE duration
 386 ms -> 21 ms. MoE `mul_mat_q` is now the top cost (59.9%) - the next
 bottleneck if PP is still too slow.
 
-## Validation
+## Follow-up sweep (2026-08-05): other tile sizes?
 
-- `test-backend-ops test -b ROCm0 -o FLASH_ATTN_EXT`: 2920/2920 pass
+Question: can we push past 4 blocks/SM? The LDS budget said yes on paper
+(64 KB/CU, cpy_ne=4): shrink nbatch_K 64->32 gives 11,776 B/block (5 blocks),
+or drop to 8-col tiles at 9,216 B/block (7 blocks). Both were tested with the
+same harness (llama-server, 8510-tok PP, b2048, q8_0 KV):
+
+| config (ncols, nthreads, nbatch_fa, nbatch_K, occ) | LDS | target | pp t/s | vs base |
+|----------------------------------------------------|-----|--------|-------:|--------|
+| base: (16, 256, 32, 64, 2) | 13,824 | 4 blk | 839-840 | - |
+| (16, 256, 32, 32, 2) | 11,776 | 5 blk | 394.3 | -53% |
+| (16, 256, 32, 32, 5) | 11,776 | 5 blk | 243.9 | -71% |
+| (8, 128, 32, 64, 7) | 9,216 | 7 blk | 425.8 | -49% |
+
+Both families regressed; the 4-block/16-col config is the optimum. Why:
+
+- warps/CU = 2048*nthreads/LDS, capped at 40 waves by HW. Base config sits at
+  32 warps (4 blk x 8 warps) - the max that needs neither fewer registers nor
+  more KQ barriers.
+- nbatch_K 64->32 doubles the KQ loop iterations -> ~2x __syncthreads cost.
+  At occupancy=2 that alone costs ~2x (394 vs 840); the occupancy=5 hint
+  (<=51 VGPR) then spills registers on top (244).
+- 8-col at 7 blocks is only 28 warps (fewer than base's 32) AND halves KV
+  reuse (each HBM KV read serves 8 Q columns instead of 16) on a kernel that
+  is HBM-latency-bound. The occupancy=7 hint (<=73 VGPR) adds spill risk.
+
+No route to >32 warps exists that avoids one of the two proven regressions,
+so tuning is done. All experiment edits reverted; base config restored and
+re-validated.
+
+## Follow-up (2026-08-05): mul_mat_q occupancy sweep - INVALID, REVERTED
+
+After the FA fix, `mul_mat_q` became the top cost (59.9% of kernel time).
+Analysis: it runs at **2 blocks/CU (20% occupancy)** - VGPR 96 + LDS 27,648 B
+(reg-limit 2.67, LDS-limit 2.37) - the exact low-occupancy state FA had pre-fix.
+The Q5_K dot is per-byte `v_mul_i32_i24_sdwa`+`v_add3_u32` (no packed dot on
+gfx900), so it is HBM-LDS-latency-bound with nothing to hide it.
+
+An occupancy sweep (shrink I/J to fit more blocks/CU) measured large speedups
+(2->4 blocks: 9216 -> 4446 ms mul_mat_q, PP 840 -> ~1150 t/s) BUT was later
+found to produce **garbage output** (repeated `/` tokens) - the measured gains
+were real occupancy gains on a numerically wrong kernel. **All MMQ sweep
+changes reverted.**
+
+Root cause: the MMQ kernel's accumulator indexing is only valid for
+`I == warp_size` (64 on gfx900). `vec_dot` writes
+`sum[j0/nwarps*I/warp_size + i0/warp_size]` (left-assoc = `(j0/nwarps)*I/warp_size`)
+but `write_back` reads `sum[(j0/nwarps)*(I/warp_size) + i0/warp_size]`. These
+agree only when `I/warp_size == 1`; at I=32, vec_dot writes `sum[j0/8]` while
+write_back reads `sum[0]` for every output -> garbage logits. I=32 is
+fundamentally unsupported on wave64 (I must be >= warp_size). This was not
+caught by `test-backend-ops -o MUL_MAT` (passed 1188/1188) because the test
+shapes did not exercise the I=32 path.
+
+Consequence: with correct I=64, the LDS floor for Q5_K is 18,752 B (the X
+tile), so 3 blocks/CU requires J<=8 (Q6_K cannot reach 3 at all). Config-only
+occupancy tuning of `mul_mat_q` is a dead end on gfx900; going past 2 blocks
+needs a real kernel change (I<warp_size support or a smaller X-tile layout),
+not a config tweak. Baseline (J=64, I=64) restored and coherence re-verified.
+
+## Validation
+- `test-backend-ops test -b ROCm0 -o FLASH_ATTN_EXT`: 2922/2922 pass
   (incl. hsk=256, hsv=256, nb=512, kv=16384)
-- Coherent server output (test prompt/continuation)
+- Coherent server output (test prompt/continuation), incl. Q6_K model at
+  8.5k-tok PP - re-verified after MMQ sweep revert
 - Initial dispatch guard was too broad and aborted on DKQ=320 (no 16-col
   config exists for 320); fixed by gating to `DKQ==256 && DV==256 && VEGA`
 
@@ -82,3 +142,5 @@ bottleneck if PP is still too slow.
   gfx1010), only tested on gfx900 here.
 - DPP warp-reduces (GCN path in common.cuh) were re-enabled; measured ~1%
   faster than the `__gfx906__`-only gate.
+- Lesson: MMQ tile-size experiments must be validated for coherence (not just
+  timing); `test-backend-ops -o MUL_MAT` did not catch the I=32 indexing bug.
